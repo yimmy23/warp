@@ -265,12 +265,16 @@ impl OrchestrationEventStreamer {
                 ..
             } => self.on_streaming_exchange_updated(*conversation_id, *exchange_id, ctx),
             BlocklistAIHistoryEvent::RemoveConversation {
-                conversation_id, ..
+                conversation_id,
+                run_id,
+                ..
             }
             | BlocklistAIHistoryEvent::DeletedConversation {
-                conversation_id, ..
+                conversation_id,
+                run_id,
+                ..
             } => {
-                self.on_conversation_removed(*conversation_id, ctx);
+                self.on_conversation_removed(*conversation_id, run_id.clone(), ctx);
             }
             BlocklistAIHistoryEvent::RestoredConversations {
                 conversation_ids, ..
@@ -420,18 +424,17 @@ impl OrchestrationEventStreamer {
     /// tracked conversation's watched set (in case it was a child of
     /// another parent we're still tracking) and re-evaluates eligibility
     /// for those parents.
+    ///
+    /// `removed_run_id` is the run_id of the conversation as captured by
+    /// the history model just before it dropped its in-memory record.
+    /// Looking it up here would return `None` because the history model
+    /// emits the removal event after removing the record.
     fn on_conversation_removed(
         &mut self,
         conversation_id: AIConversationId,
+        removed_run_id: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Capture the removed conversation's run_id BEFORE we clean up,
-        // since the history model still holds the conversation record at
-        // event-emit time.
-        let removed_run_id = BlocklistAIHistoryModel::as_ref(ctx)
-            .conversation(&conversation_id)
-            .and_then(|c| c.run_id());
-
         // Drop all per-conversation streamer state in one go (cursor,
         // pending IDs, consumers, watched run_ids, SSE connection).
         // Dropping the SSE receiver causes the driver task's next send

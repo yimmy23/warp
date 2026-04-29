@@ -478,6 +478,71 @@ fn finish_restore_fetch_err_does_not_resurrect_deleted_conversation() {
 }
 
 #[test]
+fn on_conversation_removed_prunes_stale_child_run_id_from_parent() {
+    // Regression for the case where a child conversation is deleted: the
+    // parent's `watched_run_ids` set must be pruned of that child's run_id
+    // so subsequent SSE reconnects do not include the dead run_id in the
+    // filter. Previously the streamer looked up the run_id from the history
+    // model after the removal, which always returned `None` because the
+    // history model emits `RemoveConversation` after dropping the record.
+    use crate::ai::agent::conversation::AIConversation;
+    use crate::server::server_api::ai::MockAIClient;
+    use crate::server::server_api::ServerApiProvider;
+    use std::sync::Arc;
+    use warpui::App;
+
+    App::test((), |mut app| async move {
+        let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let parent_id = AIConversation::new(false).id();
+        let mut child_conversation = AIConversation::new(false);
+        let child_run_id = "550e8400-e29b-41d4-a716-446655440600".to_string();
+        child_conversation.set_run_id(child_run_id.clone());
+        let child_id = child_conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![child_conversation], ctx);
+        });
+
+        let mock = MockAIClient::new();
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let poller = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        // Seed the parent's watched set with the child's run_id, as
+        // `register_watched_run_id` would have done after the child got
+        // its server token.
+        poller.update(&mut app, |me, _| {
+            me.streams
+                .entry(parent_id)
+                .or_default()
+                .watched_run_ids
+                .insert(child_run_id.clone());
+        });
+
+        // Now invoke the removal handler with the run_id (mirroring the
+        // event payload that history_model emits with the captured run_id).
+        poller.update(&mut app, |me, ctx| {
+            me.on_conversation_removed(child_id, Some(child_run_id.clone()), ctx);
+        });
+
+        poller.read(&app, |me, _| {
+            assert!(
+                me.streams
+                    .get(&parent_id)
+                    .is_some_and(|s| !s.watched_run_ids.contains(&child_run_id)),
+                "parent's watched_run_ids must be pruned of the removed child's run_id"
+            );
+        });
+    });
+}
+
+#[test]
 fn finish_restore_fetch_reconnects_sse_when_children_added_to_open_connection() {
     // When a status transition races with the restore fetch and opens SSE
     // before children are known, finish_restore_fetch must reconnect SSE
