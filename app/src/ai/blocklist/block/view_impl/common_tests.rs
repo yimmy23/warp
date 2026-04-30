@@ -11,8 +11,9 @@ use super::{blocklist_image_asset_source, ResolvedBlocklistImageSources};
 use super::{
     collect_visual_markdown_lightbox_collection, compute_visual_section_width,
     inline_image_source_label, lightbox_trigger_for_section, query_prefix_highlight_len,
-    render_scrollable_collapsible_content, text_sections_with_indices, CollapsibleElementState,
-    CollapsibleExpansionState, VisualMarkdownLightboxCollection,
+    render_scrollable_collapsible_content, text_sections_with_indices,
+    user_query_mode_prefix_highlight_len, CollapsibleElementState, CollapsibleExpansionState,
+    VisualMarkdownLightboxCollection,
 };
 use crate::{
     ai::agent::{
@@ -80,6 +81,39 @@ fn query_prefix_highlight_len_keeps_existing_plan_highlighting() {
     assert_eq!(
         query_prefix_highlight_len(&input, "/plan write tests"),
         Some(commands::PLAN.name.len())
+    );
+}
+#[test]
+fn query_prefix_highlight_len_highlights_orchestrate_mode() {
+    let input = AIAgentInput::UserQuery {
+        query: "split this into agents".to_string(),
+        context: Arc::new([]),
+        static_query_type: None,
+        referenced_attachments: HashMap::new(),
+        user_query_mode: UserQueryMode::Orchestrate,
+        running_command: None,
+        intended_agent: None,
+    };
+
+    assert_eq!(
+        query_prefix_highlight_len(&input, "/orchestrate split this into agents"),
+        Some(commands::ORCHESTRATE.name.len())
+    );
+}
+
+#[test]
+fn user_query_mode_prefix_highlight_len_is_exhaustive_for_modes() {
+    assert_eq!(
+        user_query_mode_prefix_highlight_len(UserQueryMode::Normal),
+        None
+    );
+    assert_eq!(
+        user_query_mode_prefix_highlight_len(UserQueryMode::Plan),
+        Some(commands::PLAN.name.len())
+    );
+    assert_eq!(
+        user_query_mode_prefix_highlight_len(UserQueryMode::Orchestrate),
+        Some(commands::ORCHESTRATE.name.len())
     );
 }
 
